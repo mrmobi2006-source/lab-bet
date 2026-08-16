@@ -15,10 +15,8 @@ load_dotenv()
 WAITING_LINK = 0
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ── Helpers ──────────────────────────────────────────────────────────────
 
 async def safe_edit(msg, text, parse_mode="HTML"):
-    """Edit message safely, fallback to plain text if HTML fails."""
     try:
         await msg.edit_text(text, parse_mode=parse_mode)
     except Exception:
@@ -27,8 +25,8 @@ async def safe_edit(msg, text, parse_mode="HTML"):
         except Exception:
             pass
 
+
 async def send_screenshot(page_or_frame, context, chat_id, caption, prefix="ss"):
-    """Take screenshot and send to user."""
     try:
         path = f"/tmp/{prefix}_{chat_id}.png"
         if hasattr(page_or_frame, 'screenshot'):
@@ -43,8 +41,8 @@ async def send_screenshot(page_or_frame, context, chat_id, caption, prefix="ss")
     except Exception as e:
         print(f"Screenshot error: {e}")
 
+
 async def find_terminal_frame(page, max_wait=60):
-    """Find Cloud Shell terminal iframe with retries."""
     terminal_frame = None
     for i in range(max_wait):
         for frame in page.frames:
@@ -57,14 +55,6 @@ async def find_terminal_frame(page, max_wait=60):
         await asyncio.sleep(1)
     return terminal_frame
 
-async def wait_for_element_in_frame(frame, selector, timeout=10000):
-    """Wait for element inside frame."""
-    try:
-        return await frame.wait_for_selector(selector, timeout=timeout)
-    except Exception:
-        return None
-
-# ── Handlers ─────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -83,6 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+
 async def start_vless(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -93,6 +84,7 @@ async def start_vless(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
     return WAITING_LINK
+
 
 async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text.strip()
@@ -106,6 +98,7 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(run_automation(update, context))
     return ConversationHandler.END
+
 
 async def run_automation(update, context):
     link = context.user_data["qwiklabs_link"]
@@ -143,23 +136,22 @@ async def run_automation(update, context):
         page = await ctx.new_page()
 
         try:
-            # ── 1. فتح رابط Qwiklabs ──
+            # Step 1
             await edit("🔄 [1/6] جاري فتح رابط Qwiklabs...")
             await page.goto(link, wait_until="networkidle", timeout=90000)
             await asyncio.sleep(5)
             await send_screenshot(page, context, chat_id, "📸 [1/6] صفحة Qwiklabs بعد الفتح", "step1")
 
-            # ── 2. التحقق من صفحة الترحيب ──
+            # Step 2
             await edit("🔄 [2/6] التحقق من صفحة الترحيب...")
             page_text = await page.inner_text("body")
 
-            if "Couldn\'t sign you in" in page_text or "couldn\'t sign you in" in page_text.lower():
+            if "Couldn\\'t sign you in" in page_text or "couldn\\'t sign you in" in page_text.lower():
                 await edit("❌ Google حظر تسجيل الدخول من هذا الخادم.\nجرب تشغيل البوت محلياً.")
                 await send_screenshot(page, context, chat_id, "❌ Google حظر الدخول", "error")
                 await browser.close()
                 return
 
-            # Click "I understand" if present
             understand_clicked = False
             for btn_text in ["I understand", "Accept", "Agree", "Continue", "Start Lab", "Start lab"]:
                 try:
@@ -180,13 +172,11 @@ async def run_automation(update, context):
             else:
                 await edit("⏳ في انتظار التوجيه التلقائي...")
 
-            # Wait for redirect
             await asyncio.sleep(10)
             current_url = page.url
             await edit(f"🔄 [2/6] الرابط الحالي: <code>{current_url[:80]}...</code>")
             await send_screenshot(page, context, chat_id, "📸 [2/6] بعد الضغط على الزر", "step2")
 
-            # If still on welcome/signin, try clicking any relevant button
             if "welcome" in current_url.lower() or "signin" in current_url.lower() or "start-lab" in current_url.lower():
                 try:
                     all_btns = await page.query_selector_all("button, [role='button'], input[type='submit'], a[href*='start']")
@@ -200,13 +190,13 @@ async def run_automation(update, context):
                     pass
                 await send_screenshot(page, context, chat_id, "📸 [2/6] بعد محاولة إضافية", "step2b")
 
-            # ── 3. الانتقال إلى Cloud Console ──
+            # Step 3
             await edit("🔄 [3/6] جاري الانتقال إلى Google Cloud Console...")
             await page.goto("https://console.cloud.google.com/home/dashboard", wait_until="networkidle", timeout=60000)
             await asyncio.sleep(5)
             await send_screenshot(page, context, chat_id, "📸 [3/6] Google Cloud Console", "step3")
 
-            # ── 4. فتح Cloud Shell ──
+            # Step 4
             await edit("🔄 [4/6] جاري فتح Google Cloud Shell...")
             await page.goto(
                 "https://shell.cloud.google.com/?hl=en_US&theme=dark&authuser=0&fromcloudshell=true&show=terminal",
@@ -215,14 +205,12 @@ async def run_automation(update, context):
             await asyncio.sleep(10)
             await send_screenshot(page, context, chat_id, "📸 [4/6] Cloud Shell (قبل OAuth)", "step4a")
 
-            # Handle OAuth / Authorize / Sign-in pages
             page_text = await page.inner_text("body")
             oauth_handled = False
 
             if "Authorize" in page_text or "Sign in" in page_text or "accountchooser" in page.url or "signin" in page.url.lower():
                 await edit("🔄 [4/6] جاري التعامل مع صفحة OAuth/Sign-in...")
 
-                # Try clicking authorize/allow buttons
                 for btn_text in ["Authorize", "Allow", "Sign in", "Continue", "Accept", "Next"]:
                     try:
                         btn = await page.wait_for_selector(
@@ -237,7 +225,6 @@ async def run_automation(update, context):
                     except Exception:
                         continue
 
-                # If account chooser, try clicking first account
                 if not oauth_handled:
                     try:
                         accounts = await page.query_selector_all('[data-email], [data-identifier], .d2laZc, [data-test-id="account-list"] > div')
@@ -248,7 +235,6 @@ async def run_automation(update, context):
                     except Exception:
                         pass
 
-                # Try email input if present
                 if not oauth_handled:
                     try:
                         email_input = await page.wait_for_selector('input[type="email"], input[name="identifier"]', timeout=5000)
@@ -264,7 +250,7 @@ async def run_automation(update, context):
                 await asyncio.sleep(8)
                 await send_screenshot(page, context, chat_id, "📸 [4/6] Cloud Shell (بعد OAuth)", "step4b")
 
-            # ── 5. العثور على Terminal ──
+            # Step 5
             await edit("🔄 [5/6] في انتظار استعداد Cloud Shell Terminal...")
             terminal_frame = await find_terminal_frame(page, max_wait=60)
 
@@ -279,7 +265,7 @@ async def run_automation(update, context):
             await asyncio.sleep(5)
             await send_screenshot(terminal_frame, context, chat_id, "📸 [5/6] Terminal جاهز", "step5")
 
-            # ── 6. تنفيذ السكربت ──
+            # Step 6
             await edit("🔄 [6/6] جاري تنفيذ سكربت VLESS...\n⏳ ~2-3 دقائق")
 
             script = """mkdir -p ~/mobo_tunnel && cd ~/mobo_tunnel && \
@@ -341,7 +327,6 @@ echo "DIRECT:${VLESS_DIRECT}" && \
 echo "===END==="
 """
 
-            # Type script into terminal using multiple strategies
             typed = False
             terminal_selectors = [
                 "textarea",
@@ -366,18 +351,19 @@ echo "===END==="
                     continue
 
             if not typed:
-                # Fallback: use evaluate to inject text
                 try:
-                    await terminal_frame.evaluate(f"""
+                    script_escaped = script.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$').replace('"', '\\"')
+                    js_code = """
                         const ta = document.querySelector('textarea') || 
                                    document.querySelector('.xterm-helper-textarea') ||
                                    document.querySelector('[class*="terminal"] textarea');
-                        if (ta) {{
+                        if (ta) {
                             ta.focus();
-                            ta.value = `{script.replace(chr(96), '\`').replace(chr(36), '\$').replace(chr(34), '\"')}`;
-                            ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        }}
-                    """)
+                            ta.value = `""" + script_escaped + """`;
+                            ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    """
+                    await terminal_frame.evaluate(js_code)
                     typed = True
                 except Exception as e:
                     print(f"Evaluate fallback failed: {e}")
@@ -388,7 +374,6 @@ echo "===END==="
                 await browser.close()
                 return
 
-            # Press Enter
             await asyncio.sleep(1)
             try:
                 await terminal_frame.press("textarea", "Enter")
@@ -400,13 +385,9 @@ echo "===END==="
 
             await edit("🔄 [6/6] في انتظار اكتمال النشر...\n⏳ ~2-3 دقائق")
             await asyncio.sleep(90)
-
-            # Take screenshot of terminal during execution
             await send_screenshot(terminal_frame, context, chat_id, "📸 [6/6] Terminal أثناء التنفيذ", "step6_mid")
+            await asyncio.sleep(60)
 
-            await asyncio.sleep(60)  # Additional wait for deployment
-
-            # Capture terminal content
             page_text = ""
             try:
                 page_text = await terminal_frame.content()
@@ -416,13 +397,11 @@ echo "===END==="
                 except Exception:
                     pass
 
-            # Extract results
             url_match = re.search(r'URL:([^\s<]+)', page_text)
             uuid_match = re.search(r'UUID:([^\s<]+)', page_text)
             cdn_match = re.search(r'CDN:(vless://[^\s<]+)', page_text)
             direct_match = re.search(r'DIRECT:(vless://[^\s<]+)', page_text)
 
-            # Final screenshot
             await send_screenshot(terminal_frame, context, chat_id, "📸 [6/6] النتيجة النهائية", "step6_final")
 
             if cdn_match and direct_match:
@@ -461,9 +440,11 @@ echo "===END==="
         finally:
             await browser.close()
 
+
 async def cancel(update, context):
     await update.message.reply_text("❌ تم إلغاء العملية.")
     return ConversationHandler.END
+
 
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -478,6 +459,7 @@ def main():
     application.add_handler(conv_handler)
     print("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
