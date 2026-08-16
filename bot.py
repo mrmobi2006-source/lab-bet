@@ -1,7 +1,6 @@
 import os
 import asyncio
 import re
-from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -14,7 +13,7 @@ load_dotenv()
 
 WAITING_LINK = 0
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PROXY_URL = os.getenv("PROXY_URL")  # e.g. http://user:pass@host:port or socks5://host:port
+PROXY_URL = os.getenv("PROXY_URL")
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -42,14 +41,36 @@ async def send_screenshot(page_or_frame, context, chat_id, caption, prefix="ss")
     except Exception as e:
         print(f"Screenshot error: {e}")
 
-async def find_terminal_frame(page, max_wait=90):
+async def safe_inner_text(page, selector="body", timeout=60000):
+    """Get inner text with longer timeout and fallback."""
+    try:
+        return await page.inner_text(selector, timeout=timeout)
+    except Exception as e:
+        print(f"inner_text failed: {e}")
+        try:
+            # Fallback: evaluate JavaScript
+            return await page.evaluate("document.body.innerText || document.body.textContent || ''")
+        except Exception:
+            return ""
+
+async def safe_url(page):
+    """Get current URL safely."""
+    try:
+        return page.url
+    except Exception:
+        return ""
+
+async def find_terminal_frame(page, max_wait=120):
     terminal_frame = None
     for i in range(max_wait):
         for frame in page.frames:
-            url = frame.url.lower()
-            if "cloudshell" in url or "terminal" in url or "shell" in url:
-                terminal_frame = frame
-                break
+            try:
+                url = frame.url.lower()
+                if "cloudshell" in url or "terminal" in url or "shell" in url:
+                    terminal_frame = frame
+                    break
+            except Exception:
+                continue
         if terminal_frame:
             break
         await asyncio.sleep(1)
@@ -124,7 +145,6 @@ async def run_automation(update, context):
             ]
         }
 
-        # Add proxy if configured
         if PROXY_URL:
             launch_args["proxy"] = {"server": PROXY_URL}
             await edit(f"🔄 [0/6] جاري الاتصال عبر البروكسي...\n<code>{PROXY_URL}</code>")
@@ -138,11 +158,8 @@ async def run_automation(update, context):
             locale="en-US",
             timezone_id="America/New_York",
             color_scheme="light",
-            geolocation={"latitude": 40.7128, "longitude": -74.0060},
-            permissions=["geolocation"],
         )
 
-        # Advanced stealth scripts
         await ctx.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -152,39 +169,7 @@ async def run_automation(update, context):
             Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
             Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
             Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-
-            // Remove webdriver traces
             delete navigator.__proto__.webdriver;
-
-            // Fake plugins
-            const plugins = [
-                {name: "Chrome PDF Plugin", filename: "internal-pdf-viewer"},
-                {name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai"},
-                {name: "Native Client", filename: "internal-nacl-plugin"}
-            ];
-            Object.defineProperty(navigator, 'plugins', {
-                get: function() {
-                    return plugins;
-                }
-            });
-
-            // Fake mimeTypes
-            Object.defineProperty(navigator, 'mimeTypes', {
-                get: function() {
-                    return [
-                        {type: "application/pdf", suffixes: "pdf", description: ""},
-                        {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: ""}
-                    ];
-                }
-            });
-
-            // Override permissions
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' 
-                    ? Promise.resolve({ state: Notification.permission })
-                    : originalQuery(parameters)
-            );
         """)
 
         page = await ctx.new_page()
@@ -192,21 +177,21 @@ async def run_automation(update, context):
         try:
             # ── 1. فتح رابط Qwiklabs ──
             await edit("🔄 [1/6] جاري فتح رابط Qwiklabs...")
-            await page.goto(link, wait_until="networkidle", timeout=120000)
-            await asyncio.sleep(8)
+            await page.goto(link, wait_until="domcontentloaded", timeout=120000)
+            await page.wait_for_load_state("networkidle", timeout=120000)
+            await asyncio.sleep(10)
             await send_screenshot(page, context, chat_id, "📸 [1/6] صفحة Qwiklabs بعد الفتح", "step1")
 
             # ── 2. التحقق من صفحة الترحيب ──
             await edit("🔄 [2/6] التحقق من صفحة الترحيب...")
-            page_text = await page.inner_text("body")
-            current_url = page.url
+            page_text = await safe_inner_text(page, "body", timeout=60000)
+            current_url = await safe_url(page)
 
-            if "Couldn\\'t sign you in" in page_text or "couldn\\'t sign you in" in page_text.lower():
+            if "couldn" in page_text.lower() and "sign" in page_text.lower() and "in" in page_text.lower():
                 await edit("❌ [2/6] Google حظر تسجيل الدخول من هذا الخادم/بروكسي.\n"
                            "💡 الحلول:\n"
                            "• جرب بروكسي مختلف (Residential proxy أفضل)\n"
-                           "• شغّل البوت محلياً على جهازك\n"
-                           "• استخدم VPN على الخادم")
+                           "• شغّل البوت محلياً على جهازك")
                 await send_screenshot(page, context, chat_id, "❌ Google حظر الدخول", "error")
                 await browser.close()
                 return
@@ -217,12 +202,12 @@ async def run_automation(update, context):
                 try:
                     btn = await page.wait_for_selector(
                         f'button:has-text("{btn_text}"), [role="button"]:has-text("{btn_text}"), input[type="submit"][value="{btn_text}"], a:has-text("{btn_text}")',
-                        timeout=5000
+                        timeout=8000
                     )
                     if btn:
                         await btn.click()
                         understand_clicked = True
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(8)
                         break
                 except Exception:
                     continue
@@ -233,20 +218,20 @@ async def run_automation(update, context):
                 await edit("⏳ في انتظار التوجيه التلقائي...")
 
             # Wait longer for redirects
-            await asyncio.sleep(15)
-            current_url = page.url
+            await asyncio.sleep(20)
+            current_url = await safe_url(page)
             await edit(f"🔄 [2/6] الرابط الحالي: <code>{current_url[:80]}...</code>")
             await send_screenshot(page, context, chat_id, "📸 [2/6] بعد الضغط على الزر", "step2")
 
             # If still on welcome/signin, try more buttons
-            if any(x in current_url.lower() for x in ["welcome", "signin", "start-lab", "auth", "login"]):
+            if any(x in current_url.lower() for x in ["welcome", "signin", "start-lab", "auth", "login", "accountchooser"]):
                 try:
                     all_btns = await page.query_selector_all("button, [role='button'], input[type='submit'], a[href*='start'], a[href*='launch']")
                     for btn in all_btns:
                         text = await btn.inner_text()
                         if any(x in text.lower() for x in ["understand", "accept", "agree", "continue", "next", "start", "launch", "begin", "go"]):
                             await btn.click()
-                            await asyncio.sleep(8)
+                            await asyncio.sleep(10)
                             break
                 except Exception:
                     pass
@@ -254,65 +239,73 @@ async def run_automation(update, context):
 
             # ── 3. الانتقال إلى Cloud Console ──
             await edit("🔄 [3/6] جاري الانتقال إلى Google Cloud Console...")
-            await page.goto("https://console.cloud.google.com/home/dashboard", wait_until="networkidle", timeout=90000)
-            await asyncio.sleep(8)
+            await page.goto("https://console.cloud.google.com/home/dashboard", wait_until="domcontentloaded", timeout=120000)
+            await page.wait_for_load_state("networkidle", timeout=120000)
+            await asyncio.sleep(10)
             await send_screenshot(page, context, chat_id, "📸 [3/6] Google Cloud Console", "step3")
 
             # ── 4. فتح Cloud Shell ──
             await edit("🔄 [4/6] جاري فتح Google Cloud Shell...")
             await page.goto(
                 "https://shell.cloud.google.com/?hl=en_US&theme=dark&authuser=0&fromcloudshell=true&show=terminal",
-                wait_until="networkidle", timeout=180000
+                wait_until="domcontentloaded", timeout=180000
             )
-            await asyncio.sleep(15)
+            await page.wait_for_load_state("networkidle", timeout=180000)
+            await asyncio.sleep(20)
             await send_screenshot(page, context, chat_id, "📸 [4/6] Cloud Shell (قبل OAuth)", "step4a")
 
             # Handle OAuth / Authorize / Sign-in pages with extended logic
-            page_text = await page.inner_text("body")
-            oauth_handled = False
-            max_oauth_attempts = 5
+            max_oauth_attempts = 8
 
             for attempt in range(max_oauth_attempts):
-                current_url = page.url
-                page_text = await page.inner_text("body")
+                current_url = await safe_url(page)
+                page_text = await safe_inner_text(page, "body", timeout=60000)
 
-                if not ("Authorize" in page_text or "Sign in" in page_text or "accountchooser" in current_url or "signin" in current_url.lower() or "auth" in current_url.lower()):
-                    oauth_handled = True
-                    break
+                if not any(x in current_url.lower() for x in ["authorize", "signin", "accountchooser", "auth", "login"]):
+                    if "cloudshell" in current_url.lower() or "console" in current_url.lower():
+                        break
 
-                await edit(f"🔄 [4/6] جاري التعامل مع صفحة OAuth/Sign-in (محاولة {attempt+1}/{max_oauth_attempts})...")
+                if "couldn" in page_text.lower() and "sign" in page_text.lower():
+                    await edit("❌ [4/6] Google حظر تسجيل الدخول.\n"
+                               "💡 جرب بروكسي Residential أو شغّل البوت محلياً.")
+                    await send_screenshot(page, context, chat_id, "❌ حظر Google", "error_oauth")
+                    await browser.close()
+                    return
 
-                # Try clicking authorize/allow/continue buttons
-                for btn_text in ["Authorize", "Allow", "Sign in", "Continue", "Accept", "Next", "Confirm"]:
+                await edit(f"🔄 [4/6] جاري التعامل مع صفحة OAuth (محاولة {attempt+1}/{max_oauth_attempts})...")
+
+                # Try clicking buttons
+                clicked = False
+                for btn_text in ["Authorize", "Allow", "Sign in", "Continue", "Accept", "Next", "Confirm", "Trust this device"]:
                     try:
                         btn = await page.wait_for_selector(
                             f'button:has-text("{btn_text}"), [role="button"]:has-text("{btn_text}"), input[type="submit"][value="{btn_text}"]',
-                            timeout=3000
+                            timeout=5000
                         )
                         if btn:
                             await btn.click()
-                            await asyncio.sleep(8)
-                            oauth_handled = True
+                            await asyncio.sleep(10)
+                            clicked = True
                             break
                     except Exception:
                         continue
-                if oauth_handled:
-                    break
 
-                # If account chooser, try clicking first account
+                if clicked:
+                    continue
+
+                # If account chooser
                 try:
                     accounts = await page.query_selector_all('[data-email], [data-identifier], .d2laZc, [data-test-id="account-list"] > div, [role="link"]')
                     if accounts:
                         await accounts[0].click()
-                        await asyncio.sleep(8)
-                        oauth_handled = True
-                        break
+                        await asyncio.sleep(10)
+                        continue
                 except Exception:
                     pass
 
                 # Check for email input field
                 try:
-                    email_input = await page.wait_for_selector('input[type="email"], input[name="identifier"], input[autocomplete="username"]', timeout=3000)
+                    email_input = await page.wait_for_selector('input[type="email"], input[name="identifier"], input[autocomplete="username"]', timeout=5000)
                     if email_input:
                         await edit("⚠️ [4/6] Google يطلب بريد إلكتروني.\n"
                                    "❌ لا يمكن المتابعة تلقائياً — يحتاج تسجيل دخول يدوي.\n\n"
@@ -325,26 +318,23 @@ async def run_automation(update, context):
                 except Exception:
                     pass
 
-                await asyncio.sleep(5)
-
-            if not oauth_handled:
-                await edit("⚠️ [4/6] لم يتم التعامل مع OAuth بشكل كامل، جاري المتابعة...")
+                await asyncio.sleep(8)
 
             await send_screenshot(page, context, chat_id, "📸 [4/6] Cloud Shell (بعد OAuth)", "step4b")
 
             # ── 5. العثور على Terminal ──
             await edit("🔄 [5/6] في انتظار استعداد Cloud Shell Terminal...")
-            terminal_frame = await find_terminal_frame(page, max_wait=90)
+            terminal_frame = await find_terminal_frame(page, max_wait=120)
 
             if not terminal_frame:
-                await edit("❌ [5/6] لم يُعثر على Cloud Shell Terminal بعد 90 ثانية.\n"
+                await edit("❌ [5/6] لم يُعثر على Cloud Shell Terminal بعد 120 ثانية.\n"
                            "ربما لم يُفتح Cloud Shell أو هناك مشكلة في الجلسة.")
                 await send_screenshot(page, context, chat_id, "❌ لم يُعثر على Terminal", "error_terminal")
                 await browser.close()
                 return
 
             await edit("✅ [5/6] تم العثور على Terminal! جاري التحضير...")
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)
             await send_screenshot(terminal_frame, context, chat_id, "📸 [5/6] Terminal جاهز", "step5")
 
             # ── 6. تنفيذ السكربت ──
@@ -409,7 +399,7 @@ echo "DIRECT:${VLESS_DIRECT}" && \
 echo "===END==="
 """
 
-            # Type script into terminal using multiple strategies
+            # Type script into terminal
             typed = False
             terminal_selectors = [
                 "textarea",
@@ -435,7 +425,6 @@ echo "===END==="
                     continue
 
             if not typed:
-                # Fallback: use evaluate to inject text
                 try:
                     await terminal_frame.evaluate("""
                         const ta = document.querySelector('textarea') || 
@@ -537,7 +526,7 @@ echo \"===END===\"`;
                     pass
 
             await edit("🔄 [6/6] في انتظار اكتمال النشر...\n⏳ ~3 دقائق")
-            await asyncio.sleep(120)
+            await asyncio.sleep(150)
             await send_screenshot(terminal_frame, context, chat_id, "📸 [6/6] Terminal أثناء التنفيذ", "step6_mid")
             await asyncio.sleep(60)
 
@@ -556,7 +545,6 @@ echo \"===END===\"`;
             cdn_match = re.search(r'CDN:(vless://[^\s<]+)', page_text)
             direct_match = re.search(r'DIRECT:(vless://[^\s<]+)', page_text)
 
-            # Final screenshot
             await send_screenshot(terminal_frame, context, chat_id, "📸 [6/6] النتيجة النهائية", "step6_final")
 
             if cdn_match and direct_match:
