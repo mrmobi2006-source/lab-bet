@@ -165,7 +165,35 @@ async def run_automation(update, context):
                 "https://shell.cloud.google.com/?hl=en_US&theme=dark&authuser=0&fromcloudshell=true&show=terminal",
                 wait_until="networkidle", timeout=120000
             )
-            await asyncio.sleep(15)
+            await asyncio.sleep(10)
+
+            # Handle OAuth / Authorize page if it appears
+            page_text = await page.inner_text("body")
+            if "Authorize" in page_text or "Sign in" in page_text or "accountchooser" in page.url:
+                await edit("🔄 [4/5] جاري التعامل مع صفحة OAuth...")
+                # Try to click any authorize/signin button
+                for btn_text in ["Authorize", "Allow", "Sign in", "Continue", "Accept"]:
+                    try:
+                        btn = await page.wait_for_selector(
+                            f'button:has-text("{btn_text}"), [role="button"]:has-text("{btn_text}"), input[type="submit"][value="{btn_text}"]',
+                            timeout=3000
+                        )
+                        if btn:
+                            await btn.click()
+                            await asyncio.sleep(5)
+                            break
+                    except Exception:
+                        continue
+                # If account chooser, try clicking the first account
+                try:
+                    accounts = await page.query_selector_all('[data-email], [data-identifier], .d2laZc')
+                    if accounts:
+                        await accounts[0].click()
+                        await asyncio.sleep(5)
+                except Exception:
+                    pass
+
+            await asyncio.sleep(10)
 
             await edit("🔄 [4/5] في انتظار استعداد Cloud Shell...")
             await asyncio.sleep(20)
@@ -253,17 +281,21 @@ echo "DIRECT:${VLESS_DIRECT}" && \
 echo "===END==="
 """
 
+            # FIX: Use page.keyboard instead of terminal_frame.keyboard
             if terminal_frame:
                 try:
-                    await terminal_frame.type("textarea", script, delay=10)
+                    # Focus the terminal frame first
+                    await terminal_frame.evaluate("document.querySelector('textarea').focus()")
+                    await asyncio.sleep(1)
+                    await terminal_frame.type("textarea", script, delay=5)
                 except Exception:
-                    pass
-                await asyncio.sleep(1)
-                await terminal_frame.keyboard.press("Enter")
+                    # Fallback: type in main page
+                    await page.keyboard.type(script, delay=5)
             else:
-                await page.keyboard.type(script, delay=10)
-                await asyncio.sleep(1)
-                await page.keyboard.press("Enter")
+                await page.keyboard.type(script, delay=5)
+
+            await asyncio.sleep(1)
+            await page.keyboard.press("Enter")
 
             await edit("🔄 [5/5] في انتظار اكتمال النشر...<br>⏳ ~2 دقيقة")
             await asyncio.sleep(90)
