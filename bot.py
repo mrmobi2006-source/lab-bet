@@ -115,20 +115,49 @@ async def run_automation(update, context):
                 "--disable-accelerated-2d-canvas",
                 "--disable-gpu",
                 "--window-size=1920,1080",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-site-isolation-trials",
+                "--disable-features=BlockInsecurePrivateNetworkRequests",
             ]
         )
         ctx = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             locale="en-US",
             timezone_id="America/New_York",
+            java_script_enabled=True,
+            bypass_csp=True,
         )
+        # Stealth: remove webdriver property
+        await ctx.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        """)
         page = await ctx.new_page()
 
         try:
             await edit("🔄 [1/7] جاري فتح رابط Qwiklabs...")
             await page.goto(link, wait_until="domcontentloaded", timeout=90000)
             await asyncio.sleep(4)
+
+            # Check for Google security blocks
+            page_text = await page.inner_text("body")
+            if "Couldn't sign you in" in page_text or "Contact your domain admin" in page_text:
+                await edit("❌ Google حظر تسجيل الدخول من هذا الخادم.<br>جرب تشغيل البوت محلياً أو استخدم VPN/Proxy.")
+                await browser.close()
+                return
+            if "This browser or app may not be secure" in page_text:
+                await edit("❌ Google اكتشف المتصفح الآلي.<br>جرب تشغيل البوت محلياً.")
+                await browser.close()
+                return
+            if "Unusual traffic" in page_text or "unusual traffic" in page_text:
+                await edit("❌ Google اكتشف حركة مرور غير طبيعية.<br>انتظر قليلاً وحاول مرة أخرى.")
+                await browser.close()
+                return
 
             await edit("🔄 [2/7] جاري تسجيل الدخول إلى Google...")
             await page.wait_for_selector('input[type="email"]', timeout=15000)
