@@ -140,6 +140,18 @@ async def run_automation(update, context):
             await page.click("button:has-text('Next'), #passwordNext")
             await asyncio.sleep(5)
 
+            # Check for "Welcome to your new account" / "I understand" page
+            try:
+                understand_btn = await page.wait_for_selector(
+                    'button:has-text("I understand"), [data-test-id="submit-button"], button:has-text("Accept"), button:has-text("Agree")',
+                    timeout=8000
+                )
+                if understand_btn:
+                    await understand_btn.click()
+                    await asyncio.sleep(3)
+            except Exception:
+                pass
+
             current_url = page.url
             if "challenge" in current_url or "signin" in current_url:
                 await asyncio.sleep(5)
